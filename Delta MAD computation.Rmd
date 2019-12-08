@@ -1,0 +1,605 @@
+---
+title: "Robust effect sizes"
+author: "Barney Ricca"
+date: "12/15/2017"
+output: word_document
+---
+Some notes:
+
+* Look also at the notes at Appsilon Data Science
+* Using LaTEX for equations, as these knit well to Word. ( _Will the resulting MS Word file open in GoogleDocs, with appropriate plugins?_)
+* https://www.tidyverse.org/articles/2017/12/workflow-vs-script/
+*https://www.r-bloggers.com/a-minimal-project-tree-in-r/
+
+
+###$\Delta$: A robust alternative to Cohen's d
+
+$\Delta$ is a robust alternative to Cohen's _d_ using medians and mads instead of means and standard deviations. In parallel to Cohen's d, Blaine's delta is defined as:
+\[
+\begin{equation}
+\Delta = \frac{|median(data_1)-median(data_2)|}{mad_{pooled}}
+\end{equation}
+\]
+where
+\[
+mad_{pooled}= \frac{(n_1-1)mad(data_1)+(n_2-1)mad(data_2)}{n_1+n_2-2}
+\]
+I.e., the absolute value of the difference in centers divided by the pooled robust variation. It is unclear what the mad-world variance equivalence is, though, so we'll propose something that is in line with the pooled variance. (Should, however, consider whether a taxicab geometry is appropriate, and that mad just adds.)
+```{r setup, include=TRUE}
+# inlcude=FALSE changed in previous line
+
+knitr::opts_chunk$set(echo = TRUE)
+
+# Jenny Bryan rails against the rm() command as used below;
+#  I need to look into that.
+rm(list=ls())  # Empty the environment, so there are no surprises
+# She also recommends a file structure: \data, \plots, \img, etc. 
+#  that is consistent, and then to use relative directories from here().
+
+# Install if needed, and load packages. Somewhat simplified from:
+# http://www.vikparuchuri.com/blog/loading-andor-installing-packages/
+
+# An alternative can be found at: http://rscriptsandtips.blogspot.com/2014/02/install-and-load-missing.html - I don't know which is better.
+
+load_or_install<-function(package_names)
+{
+  for(package_name in package_names)
+  {
+    if(!is.element(package_name, installed.packages()[,1]))
+    {
+       install.packages(package_name,
+                      repos="http://lib.stat.cmu.edu/R/CRAN")
+    }
+    library(package_name,
+            character.only=TRUE,quietly=TRUE,verbose=FALSE)
+  }
+}
+
+load_or_install(c("checkpoint", "data.table", "plyr", "dplyr",
+                  "ggplot2", "lawstat", "sjmisc", "tidyr"))
+sessionInfo()  # Information about all the packages and versions
+
+Sys.time() # So we have a record of when this was knit
+```
+
+```{r functionDefs}
+# Functions listed in alphabetical order
+
+b_delta <- function(a1, a2) {
+  length(a1) -> l1
+  length(a2) -> l2
+  return(abs((median(a1)-median(a2))) / 
+           (((l1-1)*mad(a1)+(l2-1)*mad(a2))/(l1+l2-2)))
+}
+
+c_d <- function(a1, a2) {
+  # a1 and a2 are two samples (of equal sizes?)
+  # 2017-10-17: Corrected the pooling for equal sample sizes from a denominator of 2 to a denominator of sqrt(2). If, however, sd(a1)==sd(a2), then it should simply be sd(a1).
+  if(sd(a1)!=sd(a2)) {
+    return(abs((mean(a1)-mean(a2)))/(sqrt(var(a1)+var(a2))/sqrt(2)))
+  } else
+  {
+    return(abs((mean(a1)-mean(a2)))/sd(a1))
+  }
+}
+
+cnorm <- function(n, mean=.5, sd1=1, sd2=5, prob=0.2) {
+  # creating a contaminated normal distribution
+  # n: number of samples to return
+  sd <- sample(c(sd1,sd2), n, replace=T,
+                prob=c(1-prob,prob))
+  return (rnorm(n, mean, sd))
+}
+
+contamtest <- function(N=10000, n=250, p=0.2, ci=0.95, sigma=1) {
+  # A function to facilitate the testing of N, p, and n
+  # N = number of samples to draw
+  # n = size of sample
+  # p = contamination probability
+  # ci = confidence interval band (e.g., 95% is the default)
+
+  contam=cnorm(1e6, prob=p) # contaminated normal to sample from
+
+  replicate(N,rnorm(n,0,sigma)) -> a1
+  replicate(N,sample(contam,n,replace=TRUE)) -> a2
+
+  # a1 and a2 are matrices with N columns and n rows.
+  vector(mode="numeric", length=N) -> cohensd
+  vector(mode="numeric", length=N) -> blainesdelta
+  for(i in 1:N) {
+    c_d(a1[,i], a2[,i]) -> cohensd[i]
+    b_delta(a1[,i], a2[,i]) -> blainesdelta[i]
+  }
+
+  # To return: a data frame
+  (1-ci)/2 -> q # Lower quantile
+  data.frame("d" = mean(cohensd),
+             "delta" = median(blainesdelta),
+             "d.lwrCI" = quantile(x = cohensd, probs = q),
+             "d.uprCI" = quantile(x = cohensd, probs = 1-q),
+             "delta.lwrCI" = quantile(x = blainesdelta, probs = q),
+             "delta.uprCI" = quantile(x = blainesdelta, probs = 1-q)) -> ret.df
+  return(ret.df)
+}
+
+c2test <- function(N=10000, n=250, ci=0.95) {
+  # Nota bene: The old version of this function would find the CI of the
+  #  mean of _d_ and $\delta$ rather than the CI of _d_ and $\delta$.
+  # A function to facilitate the testing of N, p, and n
+  # N = number of samples to draw
+  # n = size of sample
+  # p = contamination probability
+  # ci = confidence interval band (e.g., 95% is the default)
+
+  replicate(N,rnorm(n,0,1)) -> a1
+  replicate(N,rnorm(n,0.5,5)) -> a2
+
+  # a1 and a2 are matrices with N columns and n rows.
+  vector(mode="numeric", length=N) -> cohensd
+  vector(mode="numeric", length=N) -> blainesdelta
+  for(i in 1:N) {
+    c_d(a1[,i], a2[,i]) -> cohensd[i]
+    b_delta(a1[,i], a2[,i]) -> blainesdelta[i]
+  }
+
+  # To return: a data frame
+  (1-ci)/2 -> q # Lower quantile
+  data.frame("d" = mean(cohensd),
+             "delta" = median(blainesdelta),
+             "d.lwrCI" = quantile(x = cohensd, probs = q),
+             "d.uprCI" = quantile(x = cohensd, probs = 1-q),
+             "delta.lwrCI" = quantile(x = blainesdelta, probs = q),
+             "delta.uprCI" = quantile(x = blainesdelta, probs = 1-q)) -> ret.df
+  return(ret.df)
+}
+
+deltatest <- function(N=10000, n=250, ci=0.95) {
+  # A function to facilitate the testing of N and n
+  # N = number of samples to draw
+  # n = size of sample
+  # ci = confidence interval band (e.g., 95% is the default)
+
+  replicate(N,rnorm(n,0,1)) -> a1
+  replicate(N,rnorm(n,0.5,1)) -> a2  # sd varies here
+
+  # a1 and a2 are matrices with N columns and n rows.
+  vector(mode="numeric", length=N) -> cohensd
+  vector(mode="numeric", length=N) -> blainesdelta
+  for(i in 1:N) {
+    c_d(a1[,i], a2[,i]) -> cohensd[i]
+    b_delta(a1[,i], a2[,i]) -> blainesdelta[i]
+  }
+
+  # To return: a data frame
+  (1-ci)/2 -> q # Lower quantile
+  data.frame("d" = mean(cohensd),
+             "delta" = median(blainesdelta),
+             "d.lwrCI" = quantile(x = cohensd, probs = q),
+             "d.uprCI" = quantile(x = cohensd, probs = 1-q),
+             "delta.lwrCI" = quantile(x = blainesdelta, probs = q),
+             "delta.uprCI" = quantile(x = blainesdelta, probs = 1-q)) -> ret.df
+  return(ret.df)
+}
+
+displaycomp <- function(N, n, df) {
+  cat("N = ",N,"  n = ",n,'\n')
+  cat("mean(Cohen's d): ",'\t', df$d,'\n')
+  cat("median(delta): ",'\t',df$delta,'\n')
+  cat('\n')
+  cat("95% CI of d: ",'\t', '\t', df$d.lwrCI,'\t',
+      df$d.uprCI,'\n')
+  cat("95% CI of delta: ",'\t',
+      df$delta.lwrCI,'\t',df$delta.uprCI,'\n')
+  cat('\n')
+}
+```
+
+### Simulations
+
+First, compare Cohen's d and Blaine's delta by using two different, known, normal samples:  
+	Sample 1: rnorm(n, 0, 1)  
+	Sample 2: rnorm(n, 0.5, 1)  
+These should yield a Cohen's d of 0.5, and a Blaine's delta of 0.5. ( _Is the latter claim correct? I don't understand the mad() well enough to know for sure. - BPR_)
+
+#### Homoscedastic, normal, Impact of sample sizes
+```{r nImpactClose}
+1e4->N
+0.95->ci
+
+Sys.time()
+
+data.frame("N"=rep(1,N),
+            "d" = rep(0.1,N),
+            "delta" = rep(0.1,N),
+            "d.lwrCI" = rep(0.1,N),
+            "d.uprCI" = rep(0.1,N),
+            "delta.lwrCI" = rep(0.1,N),
+            "delta.uprCI" = rep(0.1,N)) -> delta.df
+
+25 -> nMax
+for(i in 1:nMax) {
+  10*i->n
+  set.seed(20171205)
+  replicate(N,rnorm(n,0,1)) -> a1
+  replicate(N,rnorm(n,.5,1)) -> a2
+
+  # a1 and a2 are matrices with N columns and n rows.
+  vector(mode="numeric", length=N) -> cohensd
+  vector(mode="numeric", length=N) -> blainesdelta
+  for(j in 1:N) {
+    c_d(a1[,j], a2[,j]) -> cohensd[j]
+    b_delta(a1[,j], a2[,j]) -> blainesdelta[j]
+  }
+
+  # To return: a data frame
+  (1-ci)/2 -> q # Lower quantile
+  data.frame("n"=n,
+             "d" = mean(cohensd),
+             "delta" = median(blainesdelta),
+             "d.lwrCI" = quantile(x = cohensd, probs = q),
+             "d.uprCI" = quantile(x = cohensd, probs = 1-q),
+             "delta.lwrCI" = quantile(x = blainesdelta, probs = q),
+             "delta.uprCI" = quantile(x = blainesdelta, probs = 1-q)) -> delta.df[i,]
+}
+
+save(delta.df, file="sample size - homoscedastic.RData")
+
+```
+
+
+#### Homoscedastic, separated, sample size
+```{r nImpactFar}
+1e4->N
+0.95->ci
+
+data.frame("N"=rep(1,N),
+            "d" = rep(0.1,N),
+            "delta" = rep(0.1,N),
+            "d.lwrCI" = rep(0.1,N),
+            "d.uprCI" = rep(0.1,N),
+            "delta.lwrCI" = rep(0.1,N),
+            "delta.uprCI" = rep(0.1,N)) -> delta.df
+
+25 -> nMax
+for(i in 1:nMax) {
+  10*i->n
+  set.seed(20171205)
+  replicate(N,rnorm(n,0,1)) -> a1
+  replicate(N,rnorm(n,5,1)) -> a2
+
+  # a1 and a2 are matrices with N columns and n rows.
+  vector(mode="numeric", length=N) -> cohensd
+  vector(mode="numeric", length=N) -> blainesdelta
+  for(j in 1:N) {
+    c_d(a1[,j], a2[,j]) -> cohensd[j]
+    b_delta(a1[,j], a2[,j]) -> blainesdelta[j]
+  }
+
+  # To return: a data frame
+  (1-ci)/2 -> q # Lower quantile
+  data.frame("n"=n,
+             "d" = mean(cohensd),
+             "delta" = median(blainesdelta),
+             "d.lwrCI" = quantile(x = cohensd, probs = q),
+             "d.uprCI" = quantile(x = cohensd, probs = 1-q),
+             "delta.lwrCI" = quantile(x = blainesdelta, probs = q),
+             "delta.uprCI" = quantile(x = blainesdelta, probs = 1-q)) -> delta.df[i,]
+}
+
+save(delta.df, file="sample size - homoscedastic - far.RData")
+
+```
+
+#### homoscedastic, Impact of replications
+```{r NImpactClose}
+1e3->nMax
+250->n
+0.95->ci
+
+Sys.time()
+
+data.frame("N"=rep(1,nMax),
+            "d" = rep(0.1,nMax),
+            "delta" = rep(0.1,nMax),
+            "d.lwrCI" = rep(0.1,nMax),
+            "d.uprCI" = rep(0.1,nMax),
+            "delta.lwrCI" = rep(0.1,nMax),
+            "delta.uprCI" = rep(0.1,nMax)) -> delta.df
+
+for(i in 1:nMax) {
+  100*i->N
+  set.seed(20171205)
+  replicate(N,rnorm(n,0,1)) -> a1
+  replicate(N,rnorm(n,.5,1)) -> a2
+
+  # a1 and a2 are matrices with N columns and n rows.
+  vector(mode="numeric", length=N) -> cohensd
+  vector(mode="numeric", length=N) -> blainesdelta
+  for(j in 1:N) {
+    c_d(a1[,j], a2[,j]) -> cohensd[j]
+    b_delta(a1[,j], a2[,j]) -> blainesdelta[j]
+  }
+
+  # To return: a data frame
+  (1-ci)/2 -> q # Lower quantile
+  data.frame("N"=N,
+             "d" = mean(cohensd),
+             "delta" = median(blainesdelta),
+             "d.lwrCI" = quantile(x = cohensd, probs = q),
+             "d.uprCI" = quantile(x = cohensd, probs = 1-q),
+             "delta.lwrCI" = quantile(x = blainesdelta, probs = q),
+             "delta.uprCI" = quantile(x = blainesdelta, probs = 1-q)) -> delta.df[i,]
+}
+
+save(delta.df, file="homoscedastic - replications.RData")
+
+```
+
+#### Unequal variances
+$\sigma_2/\sigma_1$ = (0.2, 0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 5.0)
+```{r unequalVariances}
+
+set.seed(2017102326)
+1e4 -> N   # Number of replications
+5 -> size  # Initial sample size; step size for future sample sizes
+0.95 -> ci
+(1-ci)/2 -> q # Lower quantile
+
+c(0.2, 0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 5.0) -> sigma_ratio
+
+Sys.time()
+
+# Do one to establish the data frame.
+replicate(N,rnorm(5,0,1)) -> a1
+replicate(N,rnorm(5,.5,0.1)) -> a2
+
+# a1 and a2 are matrices with N columns and n rows.
+vector(mode="numeric", length=N) -> cohensd
+vector(mode="numeric", length=N) -> blainesdelta
+for(i in 1:N) {
+  c_d(a1[,i], a2[,i]) -> cohensd[i]
+  b_delta(a1[,i], a2[,i]) -> blainesdelta[i]
+}
+
+# To return: a data frame
+data.frame("r" = 0.1, "n" = 5,
+            "d" = mean(cohensd),
+            "delta" = median(blainesdelta),
+            "d.lwrCI" = quantile(x = cohensd, probs = q),
+            "d.uprCI" = quantile(x = cohensd, probs = 1-q),
+            "delta.lwrCI" = quantile(x = blainesdelta, probs = q),
+            "delta.uprCI" = quantile(x = blainesdelta, probs = 1-q)) -> ratio.df
+
+for(j in 1:50) {
+  for(s in sigma_ratio) {
+
+    replicate(N,rnorm(5*j,0,1)) -> a1
+    replicate(N,rnorm(5*j,.5,s)) -> a2
+
+    # a1 and a2 are matrices with N columns and n rows.
+    vector(mode="numeric", length=N) -> cohensd
+    vector(mode="numeric", length=N) -> blainesdelta
+    for(i in 1:N) {
+      c_d(a1[,i], a2[,i]) -> cohensd[i]
+      b_delta(a1[,i], a2[,i]) -> blainesdelta[i]
+    }
+
+    # To return: a data frame
+    rbind(ratio.df,data.frame("r" = s, "n" = j*5,
+            "d" = mean(cohensd),
+            "delta" = median(blainesdelta),
+            "d.lwrCI" = quantile(x = cohensd, probs = q),
+            "d.uprCI" = quantile(x = cohensd, probs = 1-q),
+            "delta.lwrCI" = quantile(x = blainesdelta, probs = q),
+            "delta.uprCI" = quantile(x = blainesdelta, probs = 1-q))) -> ratio.df
+  }
+}
+
+save(ratio.df, file="Unequal variances.RData")
+
+```
+
+
+#### Contaminated by probability of heteroscedastic normal
+In 5% increments, contaminate one normal with another (of the same mean, but different standard deviation). The impact of sample size is also considered.
+
+* Look at impact of sample size
+* Look at impact of the percentage of the contamination
+
+The next chunk (contaminatedNormal) took about 8 hours to run; it can be skipped (hence, the "eval=FALSE") as the resulting data frame is saved on disk.
+```{r contaimatedNormal, eval=FALSE}
+set.seed(2017101820)
+1e4 -> N   # Number of replications
+5 -> size  # Sample size; step size for future sample sizes
+20->gridsize
+contamtest(N, size, p=0.05) -> effsize.df
+
+# Do the grid
+for(i in 1:50) {
+  for(j in 0:gridsize) {
+    rbind(effsize.df, contamtest(N,n=i*size, p=as.numeric(j/gridsize))) -> effsize.df
+  }
+}
+# Complete the data frame:
+# Sample size: 5, then 1:50, 21 times each
+c(5,rep(seq(from=5, to=250, by=5), each=21)) -> samp.size
+# probability of contamination: 0.05, then 0->1 in steps of 0.5
+c(0.05, rep(seq(from=0, to=1, by=0.05), 50)) -> prob
+samp.size -> effsize.df$Sample
+prob -> effsize.df$Prob
+
+# Save it
+save(effsize.df,file="Contaminated normals.RData")
+```
+
+
+#### Contaminated by upper uniforms
+Try to contaminate without the tests finding anything.
+
+N=5000 because that's the upper limit on R's implementation of the Shapiro-Wilk test.
+```{r contaminatedUpperUniforms}
+Sys.time()
+set.seed(2017120528)
+100 -> N  # Sample size
+100 -> M  # Maximum number of replacements
+1e4 -> R  # Number of times to work with the same number of replacements
+# Create the data frame
+data.frame("Replacements"=as.factor(rep(0:(M-1),R)),
+           "Levene"=rep(0.1,M*R),
+           "Shapiro"=rep(0.1,M*R),
+           "Delta"=rep(0.1,M*R),
+           "d"=rep(0.1,M*R))->results.df
+
+1->k
+for(i in 0:(M-1)) {
+  for(j in 1:R) {
+    rnorm(N,0,1) -> a1
+    rnorm(N-i,0.5,1) -> a2
+    append(a2, runif(i, min=2, max=4))->a2
+    data.frame("Value"=c(a1,a2),"Group"=c(rep("A",N),rep("B",N)))->data.df
+
+    # Levene (homogeneity of variances): Null hypothesis is homoskedastic
+    # Shapiro (normality): Null hypothesis is normal data
+    as.factor(i) -> results.df[k,1]
+    levene.test(data.df$Value, data.df$Group,
+                location="mean")$p.value -> results.df[k,2]
+    shapiro.test(a2)$p.value -> results.df[k,3]
+    b_delta(a1,a2) -> results.df[k,4]
+    c_d(a1,a2) -> results.df[k,5]
+    k+1 -> k
+  }
+}
+
+save(results.df, file="upper contamination.RData")
+Sys.time()
+```
+
+
+
+#### Separated and contaminated by upper uniforms
+
+
+```{r contaminatedSeparatedUpperUniforms}
+set.seed(2017120529)
+100 -> N
+100 -> M
+1e4 -> R
+# Create the data frame
+data.frame("Replacements"=as.factor(rep(0:(M-1),R)),
+           "Levene"=rep(0.1,M*R),
+           "Shapiro"=rep(0.1,M*R),
+           "Delta"=rep(0.1,M*R),
+           "d"=rep(0.1,M*R))->results.df
+
+1->k
+for(i in 0:(M-1)) {
+  for(j in 1:R) {
+    rnorm(N,0,1) -> a1
+    rnorm(N-i,5,1) -> a2
+    append(a2, runif(i, min=7, max=9))->a2
+    data.frame("Value"=c(a1,a2),"Group"=c(rep("A",N),rep("B",N)))->data.df
+
+    # Levene (homogeneity of variances): Null hypothesis is homoskedastic
+    # Shapiro (normality): Null hypothesis is normal data
+    as.factor(i) -> results.df[k,1]
+    levene.test(data.df$Value, data.df$Group,
+                location="mean")$p.value -> results.df[k,2]
+    shapiro.test(a1)$p.value -> results.df[k,3]
+    b_delta(a1,a2) -> results.df[k,4]
+    c_d(a1,a2) -> results.df[k,5]
+    k+1 -> k
+  }
+}
+
+save(results.df, file = "separated upper contamination.RData")
+
+```
+
+
+#### Separated and contaminated by lower uniforms
+Contaminate below the mean of the upper normal
+```{r contaminatedSeparatedLowerUniforms}
+set.seed(2017120529)
+100 -> N
+100 -> M
+1e4 -> R
+# Create the data frame
+data.frame("Replacements"=as.factor(rep(0:(M-1),R)),
+           "Levene"=rep(0.1,M*R),
+           "Shapiro"=rep(0.1,M*R),
+           "Delta"=rep(0.1,M*R),
+           "d"=rep(0.1,M*R))->results.df
+
+1->k
+for(i in 0:(M-1)) {
+  for(j in 1:R) {
+    rnorm(N,0,1) -> a1
+    rnorm(N-i,0.5,1) -> a2
+    append(a2, runif(i, min=1.5, max=3.5))->a2
+    data.frame("Value"=c(a1,a2),"Group"=c(rep("A",N),rep("B",N)))->data.df
+
+    # Levene (homogeneity of variances): Null hypothesis is homoskedastic
+    # Shapiro (normality): Null hypothesis is normal data
+    as.factor(i) -> results.df[k,1]
+    levene.test(data.df$Value, data.df$Group,
+                location="mean")$p.value -> results.df[k,2]
+    shapiro.test(a1)$p.value -> results.df[k,3]
+    b_delta(a1,a2) -> results.df[k,4]
+    c_d(a1,a2) -> results.df[k,5]
+    k+1 -> k
+  }
+}
+save(results.df, file="separated lower contamination.RData")
+```
+
+
+
+
+#### Use a normal contamination.
+```{r contaminated_two_normal}
+set.seed(2017120528)
+100 -> N
+100 -> M
+1e4 -> R
+# Create the data frame
+data.frame("Replacements"=as.factor(rep(0:(M-1),R)),
+           "Levene"=rep(0.1,M*R),
+           "Shapiro"=rep(0.1,M*R),
+           "Delta"=rep(0.1,M*R),
+           "d"=rep(0.1,M*R))->results.df
+
+1->k
+for(i in 0:(M-1)) {
+  for(j in 1:R) {
+    rnorm(N,0,1) -> a1
+    rnorm(N-i,0.5,1) -> a2
+    append(a2, rnorm(i, 3, 0.5))->a2
+    data.frame("Value"=c(a1,a2),"Group"=c(rep("A",N),rep("B",N)))->data.df
+
+    # Levene (homogeneity of variances): Null hypothesis is homoskedastic
+    # Shapiro (normality): Null hypothesis is normal data
+    as.factor(i) -> results.df[k,1]
+    levene.test(data.df$Value, data.df$Group,
+                location="mean")$p.value -> results.df[k,2]
+    shapiro.test(a2)$p.value -> results.df[k,3]
+    b_delta(a1,a2) -> results.df[k,4]
+    c_d(a1,a2) -> results.df[k,5]
+    k+1 -> k
+  }
+}
+
+save(results.df,file="separated normal contamiatnion.RData")
+
+```
+
+Can we do power of these tests?
+
+How to display these? I think I need a table like this:
+
+Contamination | Percent not found | Delta mean | Delta sd | d mean | d sd
+--------------|-------------------|------------|----------|--------|-----
+0             | 2.3               |  0.49      | 0.32     | 0.43   | 0.25
+
+
+However, we also need similar things for when the contamination is found by the tests. Compare the differences
+

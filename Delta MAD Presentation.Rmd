@@ -1,0 +1,517 @@
+---
+title: "Delta Data Presentation"
+author: "Barney Ricca"
+date: "12/16/2017"
+output: word_document
+---
+To do, based on our conversations:
+
+
+
+###Graphs of Robust Effect Size Estimates
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+
+c("data.table", "plyr", "dplyr", "ggplot2",
+  "here", "lawstat", "sjmisc", "tidyr") -> package_names
+for(package_name in package_names) {
+  if(!is.element(package_name, installed.packages()[,1])) {
+     install.packages(package_name, repos="http://lib.stat.cmu.edu/R/CRAN")
+  }
+  library(package_name, character.only=TRUE,quietly=TRUE,verbose=FALSE)
+}
+rm(list=c("package_names","package_name"))
+
+sessionInfo()  # Information about all the packages and versions
+
+Sys.time() # So we have a record of when this was knit
+```
+
+```{r functionDefs}
+# Functions listed in alphabetical order
+
+b_delta <- function(a1, a2) {
+  length(a1) -> l1
+  length(a2) -> l2
+  return(abs((median(a1)-median(a2))) / 
+           (((l1-1)*mad(a1)+(l2-1)*mad(a2))/(l1+l2-2)))
+}
+
+c_d <- function(a1, a2) {
+  # a1 and a2 are two samples (of equal sizes?)
+  # 2017-10-17: Corrected the pooling for equal sample sizes from a denominator of 2 to a denominator of sqrt(2). If, however, sd(a1)==sd(a2), then it should simply be sd(a1).
+  if(sd(a1)!=sd(a2)) {
+    return(abs((mean(a1)-mean(a2)))/(sqrt(var(a1)+var(a2))/sqrt(2)))
+  } else
+  {
+    return(abs((mean(a1)-mean(a2)))/sd(a1))
+  }
+}
+
+cnorm <- function(n, mean=.5, sd1=1, sd2=5, prob=0.2) {
+  # creating a contaminated normal distribution
+  # n: number of samples to return
+  sd <- sample(c(sd1,sd2), n, replace=T,
+                prob=c(1-prob,prob))
+  return (rnorm(n, mean, sd))
+}
+
+contamtest <- function(N=10000, n=250, p=0.2, ci=0.95, sigma=1) {
+  # A function to facilitate the testing of N, p, and n
+  # N = number of samples to draw
+  # n = size of sample
+  # p = contamination probability
+  # ci = confidence interval band (e.g., 95% is the default)
+
+  contam=cnorm(1e6, prob=p) # contaminated normal to sample from
+
+  replicate(N,rnorm(n,0,sigma)) -> a1
+  replicate(N,sample(contam,n,replace=TRUE)) -> a2
+
+  # a1 and a2 are matrices with N columns and n rows.
+  vector(mode="numeric", length=N) -> cohensd
+  vector(mode="numeric", length=N) -> blainesdelta
+  for(i in 1:N) {
+    c_d(a1[,i], a2[,i]) -> cohensd[i]
+    b_delta(a1[,i], a2[,i]) -> blainesdelta[i]
+  }
+
+  # To return: a data frame
+  (1-ci)/2 -> q # Lower quantile
+  data.frame("d" = mean(cohensd),
+             "delta" = median(blainesdelta),
+             "d.lwrCI" = quantile(x = cohensd, probs = q),
+             "d.uprCI" = quantile(x = cohensd, probs = 1-q),
+             "delta.lwrCI" = quantile(x = blainesdelta, probs = q),
+             "delta.uprCI" = quantile(x = blainesdelta, probs = 1-q)) -> ret.df
+  return(ret.df)
+}
+
+c2test <- function(N=10000, n=250, ci=0.95) {
+  # Nota bene: The old version of this function would find the CI of the
+  #  mean of _d_ and $\delta$ rather than the CI of _d_ and $\delta$.
+  # A function to facilitate the testing of N, p, and n
+  # N = number of samples to draw
+  # n = size of sample
+  # p = contamination probability
+  # ci = confidence interval band (e.g., 95% is the default)
+
+  replicate(N,rnorm(n,0,1)) -> a1
+  replicate(N,rnorm(n,0.5,5)) -> a2
+
+  # a1 and a2 are matrices with N columns and n rows.
+  vector(mode="numeric", length=N) -> cohensd
+  vector(mode="numeric", length=N) -> blainesdelta
+  for(i in 1:N) {
+    c_d(a1[,i], a2[,i]) -> cohensd[i]
+    b_delta(a1[,i], a2[,i]) -> blainesdelta[i]
+  }
+
+  # To return: a data frame
+  (1-ci)/2 -> q # Lower quantile
+  data.frame("d" = mean(cohensd),
+             "delta" = median(blainesdelta),
+             "d.lwrCI" = quantile(x = cohensd, probs = q),
+             "d.uprCI" = quantile(x = cohensd, probs = 1-q),
+             "delta.lwrCI" = quantile(x = blainesdelta, probs = q),
+             "delta.uprCI" = quantile(x = blainesdelta, probs = 1-q)) -> ret.df
+  return(ret.df)
+}
+
+deltatest <- function(N=10000, n=250, ci=0.95) {
+  # A function to facilitate the testing of N and n
+  # N = number of samples to draw
+  # n = size of sample
+  # ci = confidence interval band (e.g., 95% is the default)
+
+  replicate(N,rnorm(n,0,1)) -> a1
+  replicate(N,rnorm(n,0.5,1)) -> a2  # sd varies here
+
+  # a1 and a2 are matrices with N columns and n rows.
+  vector(mode="numeric", length=N) -> cohensd
+  vector(mode="numeric", length=N) -> blainesdelta
+  for(i in 1:N) {
+    c_d(a1[,i], a2[,i]) -> cohensd[i]
+    b_delta(a1[,i], a2[,i]) -> blainesdelta[i]
+  }
+
+  # To return: a data frame
+  (1-ci)/2 -> q # Lower quantile
+  data.frame("d" = mean(cohensd),
+             "delta" = median(blainesdelta),
+             "d.lwrCI" = quantile(x = cohensd, probs = q),
+             "d.uprCI" = quantile(x = cohensd, probs = 1-q),
+             "delta.lwrCI" = quantile(x = blainesdelta, probs = q),
+             "delta.uprCI" = quantile(x = blainesdelta, probs = 1-q)) -> ret.df
+  return(ret.df)
+}
+
+displaycomp <- function(N, n, df) {
+  cat("N = ",N,"  n = ",n,'\n')
+  cat("mean(Cohen's d): ",'\t', df$d,'\n')
+  cat("median(delta): ",'\t',df$delta,'\n')
+  cat('\n')
+  cat("95% CI of d: ",'\t', '\t', df$d.lwrCI,'\t',
+      df$d.uprCI,'\n')
+  cat("95% CI of delta: ",'\t',
+      df$delta.lwrCI,'\t',df$delta.uprCI,'\n')
+  cat('\n')
+}
+```
+
+### Results
+
+#### Load Data
+```{r loadData}
+# Data from rnorm(0,1) and rnorm(0.5,1)
+load("sample size - homoscedastic.RData")  # delta.df
+delta.df -> overlap_equal.df
+colnames(overlap_equal.df)[1] <- "n"
+
+# Data from rnorm(0,1) and rnorm(5,1)
+load("sample size - homoscedastic - far.RData")
+delta.df -> separate_equal.df
+colnames(separate_equal.df)[1] <- "n"
+
+# Data from rnorm(0,1) and rnorm(0.5,1), with varying N
+load("homoscedastic - replications.RData")
+delta.df -> replicate.df
+
+# Many different unequal variances: rnorm(0,1) vs. rnorm(0.5, sigma)
+load("Unequal variances.RData")
+ratio.df -> unequal.df
+
+# First contamination: rnorm(0,1) vs. p*rnorm(0.5,1) U (1-p)*rnorm(0.5,5)
+# Forgot to copy
+load("Contaminated normals.RData")
+effsize.df -> contam1.df
+
+load("Contaminated narrow normals.RData")
+effsize.df -> contam2.df
+
+# Second contamination: upper contaminated by (2,4)
+load("upper contamination.RData")
+results.df -> upper_contam.df
+
+# Second contamination: upper contaminated by (-3,-1)
+load("lower contamination.RData")
+results.df -> lower_contam.df
+
+# rnorm(5,1) contaminated by (7,9)
+load("separated upper contamination.RData")
+results.df -> sep_upper_contam.df
+
+# rnorm(.5,1) contam by (1.5, 3.5)
+load("separated lower contamination.RData")
+results.df -> con_upper_contam.df
+
+# rnorm(0.5,1) contaminated by rnorm(3,1)
+load("separated normal contamiatnion.RData")
+results.df -> norm_norm.df
+
+```
+
+### The plots
+What needs to be plotted for results?
+
+#### Impact of n: rnorm(0,1) and rnorm(0.5, 1)
+This doesn't take long to run, so do not create the intermediate data frame.
+```{r}
+overlap_equal.df %>%
+  to_long(., keys="Measure",
+          values = c("EffectSize","LowerCI","UpperCI"),
+          c("delta","d"), c("delta.lwrCI","d.lwrCI"),
+          c("delta.uprCI","d.uprCI")) %>%
+  filter(., n!=1) %>%
+  ggplot(., aes(x=n, y=EffectSize, shape = Measure)) +
+  scale_shape_manual(values = c(1,15)) + 
+  theme_bw() +
+  xlab("Sample size") + 
+  ylab("Effect size") +
+  geom_point() -> g
+g + ggtitle("Effect Size vs. Sample Size",
+            subtitle = "Two normal populations; mean difference = 0.5 * standard deviation") +
+  geom_smooth(method = "loess", se = FALSE, 
+              aes(linetype = Measure), color = 'black',
+              show.legend = TRUE) +
+  ylim(0.495, 0.53)
+ggsave("1a.png")
+
+g +
+  geom_errorbar(aes(ymin=LowerCI, ymax=UpperCI, group=Measure)) +
+ge
+ggsave("1b.png")
+```
+
+#### Impact of n: rnorm(0,1) and rnorm(5,1)
+```{r}
+separate_equal.df %>%
+  to_long(., keys="Measure",
+          values = c("EffectSize","LowerCI","UpperCI"),
+          c("delta","d"), c("delta.lwrCI","d.lwrCI"),
+          c("delta.uprCI","d.uprCI")) %>%
+  filter(., n!=1) %>%
+  ggplot(., aes(x=n, y=EffectSize, colour=Measure)) +
+  theme_bw() +
+  geom_point() -> g
+g + ggtitle("Effect Size vs. Sample Size",
+            subtitle = "Two normal populations; mean difference = 5 * standard devaition")
+g +
+  geom_errorbar(aes(ymin=LowerCI, ymax=UpperCI, group=Measure)) -> ge
+ge + ggtitle("Effect Size vs. Sample Size",
+             subtitle = "with 95% confidence intervals")
+
+```
+
+#### Impact of N: Replcations
+```{r}
+replicate.df %>%
+  to_long(., keys="Measure",
+          values = c("EffectSize","LowerCI","UpperCI"),
+          c("delta","d"), c("delta.lwrCI","d.lwrCI"),
+          c("delta.uprCI","d.uprCI")) %>%
+  ggplot(., aes(x=N, y=EffectSize, colour=Measure)) +
+  theme_bw() +
+  geom_point() -> g
+g + ggtitle("Effect Size vs. Number of Replications")
+g +
+  geom_errorbar(aes(ymin=LowerCI, ymax=UpperCI, group=Measure)) -> ge
+ge + ggtitle("Effect Size Confidence Intervals vs. Number of Replications")
+
+```
+
+
+#### Impact of sigma: Heteroscedastic: Impact of sigma2/sigma1
+```{r}
+# Do a middle sample size for effect size by sigma ratio
+unequal.df %>%
+  to_long(., keys="Measure",
+          values = c("EffectSize","LowerCI","UpperCI"),
+          c("delta","d"), c("delta.lwrCI","d.lwrCI"),
+          c("delta.uprCI","d.uprCI")) %>%
+  filter(., n==100) %>%
+  ggplot(., aes(x=r, y=EffectSize, colour=Measure)) +
+  theme_bw() +
+  ggtitle("Effect Size vs. Standard Deviation ratio", 
+          subtitle = "sample size = 100") +
+  xlab("Ratio of Standard Deviations") + 
+  geom_point() -> g
+g
+g +
+  geom_errorbar(aes(ymin=LowerCI, ymax=UpperCI, group=Measure)) -> ge
+ge
+
+# Do a small sample size for effect size by sigma ratio
+unequal.df %>%
+  to_long(., keys="Measure",
+          values = c("EffectSize","LowerCI","UpperCI"),
+          c("delta","d"), c("delta.lwrCI","d.lwrCI"),
+          c("delta.uprCI","d.uprCI")) %>%
+  filter(., n==10) %>%
+  ggplot(., aes(x=r, y=EffectSize, colour=Measure)) +
+  theme_bw() +
+  ggtitle("Effect Size vs. Standard Deviation ratio", 
+          subtitle = "sample size = 10") +
+  xlab("Ratio of Standard Deviations") + 
+  geom_point() -> g
+g
+g +
+  geom_errorbar(aes(ymin=LowerCI, ymax=UpperCI, group=Measure)) -> ge
+ge
+
+# Do a large sample size for effect size by sigma ratio
+unequal.df %>%
+  to_long(., keys="Measure",
+          values = c("EffectSize","LowerCI","UpperCI"),
+          c("delta","d"), c("delta.lwrCI","d.lwrCI"),
+          c("delta.uprCI","d.uprCI")) %>%
+  filter(., n==250) %>%
+  ggplot(., aes(x=r, y=EffectSize, colour=Measure)) +
+  theme_bw() +
+  ggtitle("Effect Size vs. Standard Deviation ratio", 
+          subtitle = "sample size = 250") +
+  xlab("Ratio of Standard Deviations") + 
+  geom_point() -> g
+g
+g +
+  geom_errorbar(aes(ymin=LowerCI, ymax=UpperCI, group=Measure)) -> ge
+ge
+
+```
+
+#### Impact of p: Probability contamination
+```{r}
+
+contam1.df %>%
+  to_long(., keys="Measure",
+          values = c("EffectSize","LowerCI","UpperCI"),
+          c("delta","d"), c("delta.lwrCI","d.lwrCI"),
+          c("delta.uprCI","d.uprCI")) %>%
+  filter(., Sample==250) %>%
+  ggplot(., aes(x=Prob, y=EffectSize, shape=Measure)) +
+  theme_bw() +
+  xlim(0,0.5) +
+  scale_shape_manual(values = c(1,15)) + 
+  geom_smooth(method = "loess", aes(linetype = Measure)) +
+  xlab("Fraction of points contaminated") +
+  ylab("Effect size") +
+#  ggtitle("Effect Size vs. Standard Deviation ratio", 
+#          subtitle = "sample size = 250") +
+#  xlab("Ratio of Standard Deviations") + 
+  geom_point() -> g
+g
+ggsave("2.png")
+g +
+  geom_errorbar(aes(ymin=LowerCI, ymax=UpperCI, group=Measure)) -> ge
+ge
+
+```
+```{r}
+contam2.df %>%
+  to_long(., keys="Measure",
+          values = c("EffectSize","LowerCI","UpperCI"),
+          c("delta","d"), c("delta.lwrCI","d.lwrCI"),
+          c("delta.uprCI","d.uprCI")) %>%
+  filter(., Sample==250) %>%
+  ggplot(., aes(x=Prob, y=EffectSize, shape=Measure)) +
+  theme_bw() +
+  xlim(0,0.5) +
+  scale_shape_manual(values = c(1,15)) + 
+  geom_smooth(method = "loess", aes(linetype = Measure)) +
+  xlab("Fraction of points contaminated") +
+  ylab("Effect size") +
+#  ggtitle("Effect Size vs. Standard Deviation ratio", 
+#          subtitle = "sample size = 250") +
+#  xlab("Ratio of Standard Deviations") + 
+  geom_point() -> g
+g
+#ggsave("2.png")
+g +
+  geom_errorbar(aes(ymin=LowerCI, ymax=UpperCI, group=Measure)) -> ge
+ge
+
+```
+
+
+#### Impact of b: rnorm(0.5,1) contaminated by runif(2,4)
+```{r}
+upper_contam.df %>% filter(., Levene != 0.1 & Delta != 0.1) -> upper_contam.df
+
+upper_contam.df %>%
+  filter(., Shapiro >= 0.1) %>%
+  filter(., Levene >= 0.1) %>%
+  filter(., as.numeric(Replacements) < 25) %>% 
+  group_by(., Replacements) %>%
+  dplyr::summarise(., "Delta"=median(Delta), "d"=mean(d), "Count"=n()) %>%
+  gather(Measure, EffectSize, -Replacements, -Count) %>%
+  ggplot(.,
+         aes(x=as.numeric(Replacements), y=EffectSize, 
+             shape=Measure, size=Count)) +
+  theme_bw() +
+  scale_shape_manual(values = c(1,15)) + 
+#  ggtitle("Effect Size vs. Number of Replacements", 
+#          subtitle = "Total sample size = 100\nBoth Shapiro-Wilk and Levene are significant (p<0.1)\n10000 replications at each replacement level") +
+  xlab("Number of Replacements") + 
+  ylab("Effect size")
+  geom_point() -> g
+g
+
+upper_contam.df %>%
+  filter(., Shapiro < 0.1) %>%
+  filter(., Levene < 0.1) %>%
+  filter(., as.numeric(Replacements) < 25) %>% 
+  group_by(., Replacements) %>%
+  dplyr::summarise(., "Delta"=median(Delta), "d"=mean(d), "Count"=n()) %>%
+  gather(Measure, EffectSize, -Replacements, -Count) %>%
+  ggplot(.,
+         aes(x=as.numeric(Replacements), y=EffectSize, 
+             shape=Measure, size=Count)) +
+  theme_bw() +
+#  ggtitle("Effect Size vs. Number of Replacements", 
+#          subtitle = "Total sample size = 100\nBoth Shapiro-Wilk and Levene are not significant (p>0.1)\n10000 replications at each replacement level") +
+  xlab("Percent of Replacements") + 
+  ylab("Effect size") +
+  geom_point() -> gs
+gs
+ggsave("3.png")
+```
+
+#### Impact of b: rnorm(5,1) contaminated by runif(7,9)
+Remember:
+$H_0$ of Levene is homoscedastic
+$H_0$ of Shapiro is normal
+```{r}
+sep_upper_contam.df %>%
+  filter(., Shapiro >= 0.1) %>%
+  filter(., Levene >= 0.1) %>%
+  filter(., as.numeric(Replacements) < 50) %>% 
+  group_by(., Replacements) %>%
+  dplyr::summarise(., "Delta"=median(Delta), "d"=mean(d), "Count"=n()) %>%
+  gather(Measure, EffectSize, -Replacements, -Count) %>%
+  ggplot(.,
+         aes(x=as.numeric(Replacements), y=EffectSize, 
+             color=Measure, size=Count)) +
+  theme_bw() +
+  ggtitle("Effect Size vs. Number of Replacements", 
+          subtitle = "Total sample size = 100\nBoth Shapiro-Wilk and Levene are significant\nNumber of replications per replacement level=100") +
+  xlab("Number of Replacements") + 
+  geom_point() -> g
+g
+```
+
+#### Still to do:
+
+Impact of b: rnorm(5,1) contaminated by runif(-3, -1) 
+```{r}
+lower_contam.df %>% filter(., Levene != 0.1 & Delta != 0.1) -> lower_contam.df
+
+lower_contam.df %>%
+  filter(., Shapiro >= 0.1) %>%
+  filter(., Levene >= 0.1) %>%
+  filter(., as.numeric(Replacements) < 25) %>% 
+  group_by(., Replacements) %>%
+  dplyr::summarise(., "Delta"=median(Delta), "d"=mean(d), "Count"=n()) %>%
+  gather(Measure, EffectSize, -Replacements, -Count) %>%
+  ggplot(.,
+         aes(x=as.numeric(Replacements), y=EffectSize, 
+             shape=Measure, size=Count)) +
+  theme_bw() +
+  scale_shape_manual(values = c(1,15)) + 
+#  ggtitle("Effect Size vs. Number of Replacements", 
+#          subtitle = "Total sample size = 100\nBoth Shapiro-Wilk and Levene are significant (p<0.1)\n10000 replications at each replacement level") +
+  xlab("Number of Replacements") + 
+  ylab("Effect size") +
+  geom_point() -> g
+g
+
+lower_contam.df %>%
+  filter(., Shapiro < 0.1) %>%
+  filter(., Levene < 0.1) %>%
+  filter(., as.numeric(Replacements) < 25) %>% 
+  group_by(., Replacements) %>%
+  dplyr::summarise(., "Delta"=median(Delta), "d"=mean(d), "Count"=n()) %>%
+  gather(Measure, EffectSize, -Replacements, -Count) %>%
+  ggplot(.,
+         aes(x=as.numeric(Replacements), y=EffectSize, 
+             shape=Measure, size=Count)) +
+  theme_bw() +
+#  ggtitle("Effect Size vs. Number of Replacements", 
+#          subtitle = "Total sample size = 100\nBoth Shapiro-Wilk and Levene are not significant (p>0.1)\n10000 replications at each replacement level") +
+  scale_shape_manual(values = c(1,15)) + 
+  xlab("Percent of Replacements") + 
+  ylab("Effect size") +
+  geom_point() -> gs
+gs
+ggsave("4.png")
+
+```
+
+
+
+Contamination | Percent not found | Delta mean | Delta sd | d mean | d sd
+--------------|-------------------|------------|----------|--------|-----
+0             | 2.3               |  0.49      | 0.32     | 0.43   | 0.25
+
+
+However, we also need similar things for when the contamination is found by the tests. Compare the differences
+
